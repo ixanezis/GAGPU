@@ -6,6 +6,8 @@
 #include <cuda_runtime.h>
 
 #include <thrust/sort.h>
+#include <thrust/device_vector.h>
+#include <thrust/device_ptr.h>
 
 #include "constants.h"
 
@@ -21,7 +23,7 @@ void cudasafe(cudaError_t error, char* message = "Error occured")
 	}
 }
 
-__global__ void calcScore(const float* population, float* score) {
+__global__ void calcScore(const float* population, float* score, float* scoreTmp) {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
 	if (tid < POPULATION_SIZE) {
@@ -33,52 +35,69 @@ __global__ void calcScore(const float* population, float* score) {
 			++curPos;
 		}
 
-		score[tid] = result;
+		score[tid] = scoreTmp[tid] = result;
 	}
+}
+
+__global__ void produceGeneration(const float* population, const float* nextGeneration, const float* score, const float* limitScorePtr) {
+	const float limitScore = *limitScorePtr;
+
+
 }
 
 double solveGPU() {
 	double ans = 0;
 
 	float score[POPULATION_SIZE];
-	float population[POPULATION_SIZE][VAR_NUMBER];
+	float *population = new float[POPULATION_SIZE * VAR_NUMBER];
+	float *nextGeneration = new float[POPULATION_SIZE * VAR_NUMBER];
+
 	for (int i=0; i<POPULATION_SIZE; ++i) {
 		for (int u=0; u<VAR_NUMBER; ++u) {
-			population[i][u] = float_random();
+			population[i * VAR_NUMBER + u] = float_random();
 		}
 	}
 
 	// copying population to device
 	float *devicePopulation = 0;
 	float *deviceScore = 0;
+	float *deviceScoreTmp = 0;
 
-	cudasafe(cudaMalloc((void **)&devicePopulation, sizeof population), "Could not allocate memory for devicePopulation");
+	cudasafe(cudaMalloc((void **)&devicePopulation, POPULATION_SIZE * VAR_NUMBER * sizeof(float)), "Could not allocate memory for devicePopulation");
 	cudasafe(cudaMalloc((void **)&deviceScore, POPULATION_SIZE * sizeof (float)), "Could not allocate memory for deviceScore");
+	cudasafe(cudaMalloc((void **)&deviceScoreTmp, POPULATION_SIZE * sizeof (float)), "Could not allocate memory for deviceScoreTmp");
 
-	cudasafe(cudaMemcpy(devicePopulation, population, sizeof population, cudaMemcpyHostToDevice), "Could not copy population to device");
+	thrust::device_ptr<float> deviceScorePtrBegin(deviceScoreTmp);
+	thrust::device_ptr<float> deviceScorePtrEnd = deviceScorePtrBegin + POPULATION_SIZE;
+
+	cudasafe(cudaMemcpy(devicePopulation, population, POPULATION_SIZE * VAR_NUMBER * sizeof(float), cudaMemcpyHostToDevice), "Could not copy population to device");
 
 	// invoking calcScore
-
 	const int MAX_THREADS_PER_BLOCK = 512;
 	const int BLOCKS_NUMBER = (POPULATION_SIZE + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
-	calcScore<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore);
+	calcScore<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore, deviceScoreTmp);
 	cudasafe(cudaGetLastError(), "Could not invoke kernel calcScore");
-
-	cudaDeviceSynchronize();
-
-	thrust::device_ptr<float> deviceScorePtrBegin(deviceScore);
-	thrust::device_ptr<float> deviceScorePtrEnd = deviceScorePtrBegin + POPULATION_SIZE;
+	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device");
 
 	thrust::sort(deviceScorePtrBegin, deviceScorePtrEnd);
 
-	cudasafe(cudaMemcpy(score, deviceScore, sizeof score, cudaMemcpyDeviceToHost), "Could not copy score to host");
-	//std::sort(score, score + POPULATION_SIZE);
-	for (int i=0; i<100; i++)
-		std::cout << score[i] << std::endl;
+	produceGeneration<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(population, nextGeneration, deviceScore, deviceScoreTmp + POPULATION_SIZE / 3);
+	cudasafe(cudaGetLastError(), "Could not invoke kernel produce nextGeneration");
+	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device");
+
+	std::cout << "printing first 10 elements of score:" << std::endl;
+	cudasafe(cudaMemcpy(score, deviceScoreTmp, sizeof score, cudaMemcpyDeviceToHost), "Could not copy score to host");
+	for (int i=0; i<10; i++)
+		std::cout << score[i] << ' ';
+	std::cout << std::endl;
 
 	// freeing memory
 	cudasafe(cudaFree(devicePopulation), "Failed to free devicePopulation");
 	cudasafe(cudaFree(deviceScore), "Failed to free deviceScore");
+	cudasafe(cudaFree(deviceScoreTmp), "Failed to free deviceScoreTmp");
+
+	delete[] population;
+	delete[] nextGeneration;
 
 	return ans;
 }
