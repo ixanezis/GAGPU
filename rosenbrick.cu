@@ -4,6 +4,8 @@
 #include <functional>
 
 #include <cuda_runtime.h>
+#include <curand.h>
+#include <curand_kernel.h>
 
 #include <thrust/sort.h>
 #include <thrust/device_vector.h>
@@ -15,15 +17,24 @@
 
 #define sqr(x) (x)*(x)
 
-void cudasafe(cudaError_t error, char* message = "Error occured")
-{
+void cudasafe(cudaError_t error, char* message = "Error occured") {
 	if(error != cudaSuccess) {
 		fprintf(stderr,"ERROR: %s : %i\n", message, error);
 		exit(-1);
 	}
 }
 
-__global__ void calcScore(const float* population, float* score, float* scoreTmp) {
+struct ScoreWithId {
+	float score;
+	int id;
+};
+
+__global__ void randomInit(curandState* state, unsigned long seed) {
+    int tid = threadIdx.x;
+    curand_init(seed, tid, 0, state + tid);
+}
+
+__global__ void calcScore(const float* population, ScoreWithId* score) {
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
 	if (tid < POPULATION_SIZE) {
@@ -35,22 +46,53 @@ __global__ void calcScore(const float* population, float* score, float* scoreTmp
 			++curPos;
 		}
 
-		score[tid] = scoreTmp[tid] = result;
+		score[tid].score = result;
+		score[tid].id = tid;
 	}
 }
 
-__global__ void produceGeneration(const float* population, const float* nextGeneration, const float* score, const float* limitScorePtr) {
-	const float limitScore = *limitScorePtr;
+struct ScoreCompare {
+	__host__ __device__ bool operator() (const ScoreWithId& a, const ScoreWithId& b) const {
+		return a.score < b.score;
+	}
+};
 
+__global__ void produceGeneration(const float* population, float* nextGeneration, const ScoreWithId* score, curandState* randomStates) {
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+	
+	float* nextGenerationPos = &nextGeneration[tid * VAR_NUMBER];
+	const float* populationPos = &population[score[tid % (POPULATION_SIZE / 3)].id * VAR_NUMBER];
+
+	if (tid < POPULATION_SIZE / 3) { // copy as is
+		for (int i=0; i<VAR_NUMBER; ++i) {
+			*nextGenerationPos = *populationPos;
+			++nextGenerationPos;
+			++populationPos;
+		}
+	} else {
+		curandState &localState = randomStates[threadIdx.x];
+		if (tid < POPULATION_SIZE * 2 / 3) { // mutate
+			for (int i=0; i<VAR_NUMBER; ++i) {
+				*nextGenerationPos = *populationPos * (curand_uniform(&localState) - 0.5);
+				++nextGenerationPos;
+				++populationPos;
+			}
+		} else { // crossover
+
+
+		}
+
+	}
 
 }
 
 double solveGPU() {
 	double ans = 0;
 
-	float score[POPULATION_SIZE];
+	const int MAX_THREADS_PER_BLOCK = 512;
+
+	ScoreWithId score[POPULATION_SIZE];
 	float *population = new float[POPULATION_SIZE * VAR_NUMBER];
-	float *nextGeneration = new float[POPULATION_SIZE * VAR_NUMBER];
 
 	for (int i=0; i<POPULATION_SIZE; ++i) {
 		for (int u=0; u<VAR_NUMBER; ++u) {
@@ -60,44 +102,50 @@ double solveGPU() {
 
 	// copying population to device
 	float *devicePopulation = 0;
-	float *deviceScore = 0;
-	float *deviceScoreTmp = 0;
+	float *nextGeneration = 0;
+	ScoreWithId *deviceScore = 0;
+	curandState* randomStates;
 
+	cudasafe(cudaMalloc(&randomStates, MAX_THREADS_PER_BLOCK * sizeof(curandState)), "Could not allocate memory for randomStates");
 	cudasafe(cudaMalloc((void **)&devicePopulation, POPULATION_SIZE * VAR_NUMBER * sizeof(float)), "Could not allocate memory for devicePopulation");
-	cudasafe(cudaMalloc((void **)&deviceScore, POPULATION_SIZE * sizeof (float)), "Could not allocate memory for deviceScore");
-	cudasafe(cudaMalloc((void **)&deviceScoreTmp, POPULATION_SIZE * sizeof (float)), "Could not allocate memory for deviceScoreTmp");
+	cudasafe(cudaMalloc((void **)&nextGeneration, POPULATION_SIZE * VAR_NUMBER * sizeof(float)), "Could not allocate memory for nextGeneration");
+	cudasafe(cudaMalloc((void **)&deviceScore, POPULATION_SIZE * sizeof (ScoreWithId)), "Could not allocate memory for deviceScore");
 
-	thrust::device_ptr<float> deviceScorePtrBegin(deviceScoreTmp);
-	thrust::device_ptr<float> deviceScorePtrEnd = deviceScorePtrBegin + POPULATION_SIZE;
+	thrust::device_ptr<ScoreWithId> deviceScorePtrBegin(deviceScore);
+	thrust::device_ptr<ScoreWithId> deviceScorePtrEnd = deviceScorePtrBegin + POPULATION_SIZE;
 
 	cudasafe(cudaMemcpy(devicePopulation, population, POPULATION_SIZE * VAR_NUMBER * sizeof(float), cudaMemcpyHostToDevice), "Could not copy population to device");
 
+	// invoking random init
+	randomInit<<<1, MAX_THREADS_PER_BLOCK>>>(randomStates, 900);
+	cudasafe(cudaGetLastError(), "Could not invoke kernel randomInit");
+	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calling randomInit");
+
 	// invoking calcScore
-	const int MAX_THREADS_PER_BLOCK = 512;
 	const int BLOCKS_NUMBER = (POPULATION_SIZE + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
-	calcScore<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore, deviceScoreTmp);
+	calcScore<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore);
 	cudasafe(cudaGetLastError(), "Could not invoke kernel calcScore");
-	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device");
+	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calsScore");
 
-	thrust::sort(deviceScorePtrBegin, deviceScorePtrEnd);
+	thrust::sort(deviceScorePtrBegin, deviceScorePtrEnd, ScoreCompare());
 
-	produceGeneration<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(population, nextGeneration, deviceScore, deviceScoreTmp + POPULATION_SIZE / 3);
-	cudasafe(cudaGetLastError(), "Could not invoke kernel produce nextGeneration");
-	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device");
+	produceGeneration<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, nextGeneration, deviceScore, randomStates);
+	cudasafe(cudaGetLastError(), "Could not invoke kernel produceGeneration");
+	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after produceGeneration");
 
 	std::cout << "printing first 10 elements of score:" << std::endl;
-	cudasafe(cudaMemcpy(score, deviceScoreTmp, sizeof score, cudaMemcpyDeviceToHost), "Could not copy score to host");
+	cudasafe(cudaMemcpy(score, deviceScore, POPULATION_SIZE * sizeof (ScoreWithId), cudaMemcpyDeviceToHost), "Could not copy score to host");
 	for (int i=0; i<10; i++)
-		std::cout << score[i] << ' ';
+		std::cout << score[i].score << ' ';
 	std::cout << std::endl;
 
 	// freeing memory
 	cudasafe(cudaFree(devicePopulation), "Failed to free devicePopulation");
 	cudasafe(cudaFree(deviceScore), "Failed to free deviceScore");
-	cudasafe(cudaFree(deviceScoreTmp), "Failed to free deviceScoreTmp");
+	cudasafe(cudaFree(randomStates), "Could not free randomStates");
+	cudasafe(cudaFree(nextGeneration), "Could not free nextGeneration");
 
 	delete[] population;
-	delete[] nextGeneration;
 
 	return ans;
 }
