@@ -61,29 +61,34 @@ __global__ void produceGeneration(const float* population, float* nextGeneration
 	int tid = blockDim.x * blockIdx.x + threadIdx.x;
 	
 	float* nextGenerationPos = &nextGeneration[tid * VAR_NUMBER];
-	const float* populationPos = &population[score[tid % (POPULATION_SIZE / 3)].id * VAR_NUMBER];
+	const float* individual = &population[score[tid % (POPULATION_SIZE / 3)].id * VAR_NUMBER];
 
 	if (tid < POPULATION_SIZE / 3) { // copy as is
 		for (int i=0; i<VAR_NUMBER; ++i) {
-			*nextGenerationPos = *populationPos;
+			*nextGenerationPos = *individual;
 			++nextGenerationPos;
-			++populationPos;
+			++individual;
 		}
 	} else {
 		curandState &localState = randomStates[threadIdx.x];
 		if (tid < POPULATION_SIZE * 2 / 3) { // mutate
 			for (int i=0; i<VAR_NUMBER; ++i) {
-				*nextGenerationPos = *populationPos * (curand_uniform(&localState) - 0.5);
+				*nextGenerationPos = *individual * (curand_uniform(&localState) - 0.5);
 				++nextGenerationPos;
-				++populationPos;
+				++individual;
 			}
-		} else { // crossover
+		} else if (tid < POPULATION_SIZE) { // crossover
+			const int otherIndividualIndex = (tid + static_cast<int>(curand_uniform(&localState) * POPULATION_SIZE)) % (POPULATION_SIZE / 3);
+			const float* otherIndividual = &population[score[otherIndividualIndex].id * VAR_NUMBER];
 
-
+			for (int i=0; i<VAR_NUMBER; ++i) {
+				*nextGenerationPos = (*individual + *otherIndividual) * 0.5f;
+				++nextGenerationPos;
+				++individual;
+				++otherIndividual;
+			}
 		}
-
 	}
-
 }
 
 double solveGPU() {
