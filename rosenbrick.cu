@@ -73,7 +73,7 @@ __global__ void produceGeneration(const float* population, float* nextGeneration
 		curandState &localState = randomStates[threadIdx.x];
 		if (tid < POPULATION_SIZE * 2 / 3) { // mutate
 			for (int i=0; i<VAR_NUMBER; ++i) {
-				*nextGenerationPos = *individual * (curand_uniform(&localState) - 0.5);
+				*nextGenerationPos = *individual + powf(10.0, ((curand_uniform(&localState) * 17) - 15)) * (curand_uniform(&localState) < 0.5f ? -1 : 1);
 				++nextGenerationPos;
 				++individual;
 			}
@@ -126,23 +126,27 @@ double solveGPU() {
 	cudasafe(cudaGetLastError(), "Could not invoke kernel randomInit");
 	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calling randomInit");
 
-	// invoking calcScore
 	const int BLOCKS_NUMBER = (POPULATION_SIZE + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
-	calcScore<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore);
-	cudasafe(cudaGetLastError(), "Could not invoke kernel calcScore");
-	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calsScore");
+	for (int i=0; i<30000; i++) {
+		// invoking calcScore
+		calcScore<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore);
+		cudasafe(cudaGetLastError(), "Could not invoke kernel calcScore");
+		cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calsScore");
 
-	thrust::sort(deviceScorePtrBegin, deviceScorePtrEnd, ScoreCompare());
+		thrust::sort(deviceScorePtrBegin, deviceScorePtrEnd, ScoreCompare());
 
-	produceGeneration<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, nextGeneration, deviceScore, randomStates);
-	cudasafe(cudaGetLastError(), "Could not invoke kernel produceGeneration");
-	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after produceGeneration");
+		produceGeneration<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, nextGeneration, deviceScore, randomStates);
+		cudasafe(cudaGetLastError(), "Could not invoke kernel produceGeneration");
+		cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after produceGeneration");
 
-	std::cout << "printing first 10 elements of score:" << std::endl;
-	cudasafe(cudaMemcpy(score, deviceScore, POPULATION_SIZE * sizeof (ScoreWithId), cudaMemcpyDeviceToHost), "Could not copy score to host");
-	for (int i=0; i<10; i++)
-		std::cout << score[i].score << ' ';
-	std::cout << std::endl;
+		std::swap(devicePopulation, nextGeneration);
+
+		std::cout << "printing first 10 elements of score:" << std::endl;
+		cudasafe(cudaMemcpy(score, deviceScore, POPULATION_SIZE * sizeof (ScoreWithId), cudaMemcpyDeviceToHost), "Could not copy score to host");
+		for (int i=0; i<10; i++)
+			std::cout << score[i].score << ' ';
+		std::cout << std::endl;
+	}
 
 	// freeing memory
 	cudasafe(cudaFree(devicePopulation), "Failed to free devicePopulation");
