@@ -24,11 +24,6 @@ void cudasafe(cudaError_t error, char* message = "Error occured") {
 	}
 }
 
-struct ScoreWithId {
-	float score;
-	int id;
-};
-
 __global__ void randomInit(curandState* state, unsigned long seed) {
     int tid = threadIdx.x;
     curand_init(seed, tid, 0, state + tid);
