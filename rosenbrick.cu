@@ -2,6 +2,7 @@
 #include <ctime>
 #include <algorithm>
 #include <functional>
+#include <iomanip>
 
 #include <cuda_runtime.h>
 #include <curand.h>
@@ -15,7 +16,10 @@
 
 // assume block size equal population size
 
-#define sqr(x) (x)*(x)
+template <class T>
+__device__ inline T sqr(const T& value) {
+	return value * value;
+}
 
 void cudasafe(cudaError_t error, char* message = "Error occured") {
 	if(error != cudaSuccess) {
@@ -57,6 +61,7 @@ __global__ void produceGeneration(const float* population, float* nextGeneration
 	
 	float* nextGenerationPos = &nextGeneration[tid * VAR_NUMBER];
 	const float* individual = &population[score[tid % (POPULATION_SIZE / 3)].id * VAR_NUMBER];
+	//const float* individual = &population[score[tid].id * VAR_NUMBER];
 
 	if (tid < POPULATION_SIZE / 3) { // copy as is
 		for (int i=0; i<VAR_NUMBER; ++i) {
@@ -74,7 +79,7 @@ __global__ void produceGeneration(const float* population, float* nextGeneration
 			}
 		} else if (tid < POPULATION_SIZE) { // crossover
 			const int otherIndividualIndex = (tid + static_cast<int>(curand_uniform(&localState) * POPULATION_SIZE)) % (POPULATION_SIZE / 3);
-			const float* otherIndividual = &population[score[otherIndividualIndex].id * VAR_NUMBER];
+			const float* otherIndividual = &population[otherIndividualIndex * VAR_NUMBER];
 
 			for (int i=0; i<VAR_NUMBER; ++i) {
 				*nextGenerationPos = (*individual + *otherIndividual) * 0.5f;
@@ -84,6 +89,27 @@ __global__ void produceGeneration(const float* population, float* nextGeneration
 			}
 		}
 	}
+}
+
+void printPopulation(const float* devicePopulation, const ScoreWithId* deviceScore) {
+	float population[POPULATION_SIZE][VAR_NUMBER];
+	cudasafe(cudaMemcpy(population, devicePopulation, POPULATION_SIZE * VAR_NUMBER * sizeof(float), cudaMemcpyDeviceToHost), "Could not copy population from device");
+
+	ScoreWithId score[POPULATION_SIZE];
+	cudasafe(cudaMemcpy(score, deviceScore, POPULATION_SIZE * sizeof (ScoreWithId), cudaMemcpyDeviceToHost), "Could not copy score to host");
+
+	//std::cout.cetf(std::ios::fixed);
+	std::cout.precision(12);
+	for (int i=0; i<VAR_NUMBER; i++) {
+		for (int u=0; u<POPULATION_SIZE; ++u) {
+			std::cout << std::setw(15) << population[u][i] << ' ';
+		}
+		std::cout << std::endl;
+	}
+	for (int i=0; i<POPULATION_SIZE; ++i) {
+		std::cout << std::setw(15) << score[i].score << ' ';
+	}
+	std::cout << std::endl;
 }
 
 double solveGPU() {
@@ -122,11 +148,12 @@ double solveGPU() {
 	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calling randomInit");
 
 	const int BLOCKS_NUMBER = (POPULATION_SIZE + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
-	for (int i=0; i<30000; i++) {
+	for (int generationIndex=0; generationIndex<30000; ++generationIndex) {
 		// invoking calcScore
 		calcScore<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore);
 		cudasafe(cudaGetLastError(), "Could not invoke kernel calcScore");
 		cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calsScore");
+		//printPopulation(devicePopulation, deviceScore);
 
 		thrust::sort(deviceScorePtrBegin, deviceScorePtrEnd, ScoreCompare());
 
@@ -136,11 +163,13 @@ double solveGPU() {
 
 		std::swap(devicePopulation, nextGeneration);
 
-		std::cout << "printing first 10 elements of score:" << std::endl;
-		cudasafe(cudaMemcpy(score, deviceScore, POPULATION_SIZE * sizeof (ScoreWithId), cudaMemcpyDeviceToHost), "Could not copy score to host");
-		for (int i=0; i<10; i++)
-			std::cout << score[i].score << ' ';
-		std::cout << std::endl;
+		if (generationIndex % 1000 == 0) {
+			std::cout << "printing first 10 elements of score:" << std::endl;
+			cudasafe(cudaMemcpy(score, deviceScore, POPULATION_SIZE * sizeof (ScoreWithId), cudaMemcpyDeviceToHost), "Could not copy score to host");
+			for (int i=0; i<10; i++)
+				std::cout << score[i].score << ' ';
+			std::cout << std::endl;
+		}
 	}
 
 	// freeing memory
@@ -155,6 +184,7 @@ double solveGPU() {
 }
 
 int main() {
+	//freopen("output.txt", "w", stdout);
 	srand(900);
 	srand(static_cast<unsigned>(time(0)));
 

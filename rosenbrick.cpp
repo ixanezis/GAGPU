@@ -23,6 +23,7 @@ void calcScore(const float *population, ScoreWithId* score) {
 		const float *curPos = &population[i * VAR_NUMBER];
 		for (size_t u=0; u<VAR_NUMBER-1; ++u) {
 			result += sqr(1 - *curPos) + 100 * sqr(*(curPos+1) - sqr(*curPos));
+			++curPos;
 		}
 		score[i].score = result;
 		score[i].id = i;
@@ -50,10 +51,10 @@ void produceGeneration(const float* population, float* nextGeneration, ScoreWith
 				}
 			} else { // crossover
 				const int otherIndividualIndex = (i + static_cast<int>(float_random() * POPULATION_SIZE)) % (POPULATION_SIZE / 3);
-				const float* otherIndividual = &population[score[otherIndividualIndex].id * VAR_NUMBER];
+				const float* otherIndividual = &population[otherIndividualIndex * VAR_NUMBER];
 
 				for (int i=0; i<VAR_NUMBER; ++i) {
-					*nextGenerationPos = (*individual + *otherIndividual) * 0.0f;
+					*nextGenerationPos = (*individual + *otherIndividual) * 0.5f;
 					++nextGenerationPos;
 					++individual;
 					++otherIndividual;
@@ -91,17 +92,25 @@ double solveCPU() {
 
 		std::swap(population, nextGeneration);
 
-		std::cout << "printing first 10 elements of score:" << std::endl;
-		for (int i=0; i<10; i++)
-			std::cout << score[i].score << ' ';
-		std::cout << std::endl;
-
+		if (generationIndex % 1000 == 0) {
+			std::cout << "printing first 10 elements of score:" << std::endl;
+			for (int i=0; i<10; i++)
+				std::cout << score[i].score << ' ';
+			std::cout << std::endl;
+		}
 		
 		if (fabs(score[0].score - KNOWN_ANSWER) < 1e-12) {
 			std::cout << "result found on generation " << generationIndex << std::endl;
 			break;
 		}
 	}
+
+	std::cout << "Best solution: " << std::endl;
+	for (int i=0; i<VAR_NUMBER; ++i) {
+		std::cout << population[i] << ' ';
+	}
+	std::cout << std::endl;
+	std::cout << "score = " << score[0].score << std::endl;
 
 	delete[] population;
 	delete[] nextGeneration;
@@ -118,9 +127,10 @@ int main() {
 		random_cache[i] = float_random();
 	}
 
+	//freopen("output-cpu.txt", "w", stdout);
 	clock_t start = clock();
 	double ans = solveCPU();
-	std::cout << "CPU answer = " << ans << std::endl;
+	//std::cout << "CPU answer = " << ans << std::endl;
 	std::cout << "Time taken on CPU = " << static_cast<double>(clock() - start) / CLOCKS_PER_SEC << std::endl;
 
 	return 0;
