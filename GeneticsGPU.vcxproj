@@ -91,7 +91,7 @@
     <ClInclude Include="constants.h" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="rosenbrick.cu" />
+    <CudaCompile Include="rosenbrick-shared.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
