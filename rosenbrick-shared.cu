@@ -104,14 +104,16 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 	const int tid = threadIdx.x;
 
 	// loading initial random population into shared memory
-	//for (int i=0; i<VAR_NUMBER; ++i)
-	//	sharedPopulation[tid][i] = population[gid * VAR_NUMBER + i];
+    if (gid < POPULATION_SIZE) {
+        for (int i=0; i<VAR_NUMBER; ++i)
+            sharedPopulation[tid][i] = population[gid * VAR_NUMBER + i];
+    }
 
 	for (int i=0; i<VAR_NUMBER; ++i)
 		sharedPopulation[tid][i] = i + tid;
 
 	curandState &localState = randomStates[tid];
-	for (int generationIndex=0; generationIndex < 30000; ++generationIndex) {
+	for (int generationIndex=0; ; ++generationIndex) {
 		__syncthreads();
 
 		// calculating score
@@ -125,7 +127,7 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 
 		__syncthreads();
 
-		if (generationIndex == 29990) break;
+		if (generationIndex == 129990) break;
 
 		// selection
 
@@ -164,10 +166,12 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 	}
 
 	// output current population back
-	for (int i=0; i<VAR_NUMBER; ++i)
-		population[gid * VAR_NUMBER + i] = sharedPopulation[tid][i];
+    if (gid < POPULATION_SIZE) {
+        for (int i=0; i<VAR_NUMBER; ++i)
+            population[gid * VAR_NUMBER + i] = sharedPopulation[tid][i];
 
-	score[gid].score = sharedScore[tid];
+        score[gid].score = sharedScore[tid];
+    }
 }
 
 void printPopulation(const float* devicePopulation, const ScoreWithId* deviceScore) {
