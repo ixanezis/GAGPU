@@ -98,7 +98,7 @@ __global__ void produceGeneration(const float* population, float* nextGeneration
 __global__ void GAKernel(float* population, ScoreWithId* score, curandState* randomStates) {
 	__shared__ float sharedPopulation[MAX_THREADS_PER_BLOCK][VAR_NUMBER];
 	__shared__ float sharedScore[MAX_THREADS_PER_BLOCK];
-	float signs[2] = {-1.0f, 1.0f};
+	const float signs[2] = {-1.0f, 1.0f};
 
 	const int gid = blockDim.x * blockIdx.x + threadIdx.x;
 	const int tid = threadIdx.x;
@@ -201,7 +201,6 @@ void printPopulation(const float* devicePopulation, const ScoreWithId* deviceSco
 double solveGPU() {
 	double ans = 0;
 
-	ScoreWithId score[POPULATION_SIZE];
 	float *population = new float[POPULATION_SIZE * VAR_NUMBER];
 
 	for (int i=0; i<POPULATION_SIZE; ++i) {
