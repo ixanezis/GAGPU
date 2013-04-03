@@ -157,12 +157,14 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 		__syncthreads();
 
 		// mutations
-		if (curand_uniform(&localState) < 0.8) {
-			for (int i=0; i<VAR_NUMBER; ++i) {
-				const float sign = signs[static_cast<int>(curand_uniform(&localState)*2)];
-				sharedPopulation[tid][i] += powf(10.0, ((curand_uniform(&localState) * 17) - 15)) * sign;
-			}
-		}
+        if (tid > MAX_THREADS_PER_BLOCK / 2) {
+            if (curand_uniform(&localState) < 0.8) {
+                for (int i=0; i<VAR_NUMBER; ++i) {
+                    const float sign = signs[static_cast<int>(curand_uniform(&localState)*2)];
+                    sharedPopulation[tid][i] += powf(10.0, ((curand_uniform(&localState) * 17) - 15)) * sign;
+                }
+            }
+        }
 	}
 
 	// output current population back
