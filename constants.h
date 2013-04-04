@@ -1,4 +1,4 @@
-const int VAR_NUMBER = 3;
+const int VAR_NUMBER = 4;
 const double KNOWN_ANSWER = 0;
 const int POPULATION_SIZE = 1000;
 const unsigned U_RAND_MAX = static_cast<unsigned>(RAND_MAX) + 1;
