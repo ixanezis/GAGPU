@@ -7,6 +7,7 @@
 #include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#include <math_constants.h>
 
 #include <thrust/sort.h>
 #include <thrust/device_vector.h>
@@ -35,23 +36,6 @@ __global__ void randomInit(curandState* state, unsigned long seed) {
     curand_init(seed, tid, 0, state + tid);
 }
 
-__global__ void calcScore(const float* population, ScoreWithId* score) {
-	int tid = blockDim.x * blockIdx.x + threadIdx.x;
-
-	if (tid < POPULATION_SIZE) {
-		float result = 0;
-	
-		const float *curPos = &population[tid * VAR_NUMBER];
-		for (size_t i=0; i<VAR_NUMBER-1; ++i) {
-			result += sqr(1 - *curPos) + 100 * sqr(*(curPos+1) - sqr(*curPos));
-			++curPos;
-		}
-
-		score[tid].score = result;
-		score[tid].id = tid;
-	}
-}
-
 __global__ void GAKernel(float* population, ScoreWithId* score, curandState* randomStates) {
 	__shared__ float sharedPopulation[MAX_THREADS_PER_BLOCK][VAR_NUMBER];
 	__shared__ float sharedScore[MAX_THREADS_PER_BLOCK];
@@ -76,15 +60,25 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 		// calculating score
 		const float *curPos = sharedPopulation[tid];
 		float result = 0;
+        // rosenbrock
 		for (size_t i=0; i<VAR_NUMBER-1; ++i) {
 			result += sqr(1 - *curPos) + 100 * sqr(*(curPos+1) - sqr(*curPos));
 			++curPos;
 		}
+
+        // rastrigin
+        /*
+        result = 10.0f * VAR_NUMBER;
+        for (size_t i=0; i<VAR_NUMBER; ++i) {
+            result += *curPos * *curPos - 10.0f * cosf(2 * CUDART_PI_F * *curPos);
+            ++curPos;
+        }
+        */
 		sharedScore[tid] = result;
 
 		__syncthreads();
 
-		if (generationIndex == 1) break;
+		if (generationIndex == 11111) break;
 
 		// selection
 
@@ -120,9 +114,25 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
                 for (int i=0; i<VAR_NUMBER; ++i) {
                     if (curand_uniform(&localState) < 0.8) {
                         const float sign = signs[static_cast<int>(curand_uniform(&localState)*2)];
-                        const float order_deviation = curand_uniform(&localState) - 0.5f;
+                        const float order_deviation = (curand_uniform(&localState) - 0.5f) * 5;
                         sharedPopulation[tid][i] += powf(10.0, order + order_deviation) * sign;
                     }
+                }
+            }
+        } else {
+            if ((blockIdx.x + generationIndex) % 5 == 0) {
+                // sharing a part of population with others
+                for (int i=0; i<VAR_NUMBER; ++i)
+                    population[gid * VAR_NUMBER + i] = sharedPopulation[tid][i];
+            }
+            
+            if ((blockIdx.x + generationIndex) % 3 == 0) {
+                if (curand_uniform(&localState) < 0.11) {
+                    // take some best individuals from neighbour
+                    const int anotherBlock = curand_uniform(&localState) * (POPULATION_SIZE / MAX_THREADS_PER_BLOCK);
+                    const int ngid  = blockDim.x * anotherBlock + threadIdx.x;
+                    for (int i=0; i<VAR_NUMBER; ++i)
+                        sharedPopulation[tid][i] = population[ngid * VAR_NUMBER + i];
                 }
             }
         }
@@ -166,13 +176,15 @@ void printPopulation(const float* devicePopulation, const ScoreWithId* deviceSco
 }
 
 double solveGPU() {
+    cudasafe(cudaSetDevice(0), "Could not set device 0");
+
 	double ans = 0;
 
 	float *population = new float[POPULATION_SIZE * VAR_NUMBER];
 
 	for (int i=0; i<POPULATION_SIZE; ++i) {
 		for (int u=0; u<VAR_NUMBER; ++u) {
-			population[i * VAR_NUMBER + u] = float_random() * 2;
+			population[i * VAR_NUMBER + u] = (float_random() - 0.5f) * 10;
 		}
 	}
 
@@ -196,13 +208,13 @@ double solveGPU() {
 
 	const int BLOCKS_NUMBER = (POPULATION_SIZE + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
 
-    for (int i=0; i<15; i++) {
+    //for (int i=0; i<1115; i++) {
         GAKernel<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore, randomStates);
         cudasafe(cudaGetLastError(), "Could not invoke GAKernel");
         cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calling GAKernel");
 
         printPopulation(devicePopulation, deviceScore);
-    }
+    //}
 
 	// freeing memory
 	cudasafe(cudaFree(devicePopulation), "Failed to free devicePopulation");
