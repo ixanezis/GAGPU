@@ -22,7 +22,7 @@ __device__ inline T sqr(const T& value) {
 	return value * value;
 }
 
-const int MAX_THREADS_PER_BLOCK = 128;
+const int MAX_THREADS_PER_BLOCK = 256;
 
 void cudasafe(cudaError_t error, char* message = "Error occured") {
 	if(error != cudaSuccess) {
@@ -61,24 +61,24 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 		const float *curPos = sharedPopulation[tid];
 		float result = 0;
         // rosenbrock
+        /*
 		for (size_t i=0; i<VAR_NUMBER-1; ++i) {
 			result += sqr(1 - *curPos) + 100 * sqr(*(curPos+1) - sqr(*curPos));
 			++curPos;
 		}
+        */
 
         // rastrigin
-        /*
         result = 10.0f * VAR_NUMBER;
         for (size_t i=0; i<VAR_NUMBER; ++i) {
             result += *curPos * *curPos - 10.0f * cosf(2 * CUDART_PI_F * *curPos);
             ++curPos;
         }
-        */
 		sharedScore[tid] = result;
 
 		__syncthreads();
 
-		if (generationIndex == 11111) break;
+		if (generationIndex == 1111111) break;
 
 		// selection
 
@@ -125,7 +125,7 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
                 for (int i=0; i<VAR_NUMBER; ++i)
                     population[gid * VAR_NUMBER + i] = sharedPopulation[tid][i];
             }
-            
+
             if ((blockIdx.x + generationIndex) % 3 == 0) {
                 if (curand_uniform(&localState) < 0.11) {
                     // take some best individuals from neighbour
