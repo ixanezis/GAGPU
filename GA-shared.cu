@@ -22,7 +22,7 @@ __device__ inline T sqr(const T& value) {
 	return value * value;
 }
 
-const int MAX_THREADS_PER_BLOCK = 256;
+const int THREADS_PER_BLOCK = 256;
 
 void cudasafe(cudaError_t error, char* message = "Error occured") {
 	if(error != cudaSuccess) {
@@ -36,9 +36,27 @@ __global__ void randomInit(curandState* state, unsigned long seed) {
     curand_init(seed, tid, 0, state + tid);
 }
 
+__device__ float rosenbrock(const float* curPos) {
+    float result = 0;
+    for (size_t i=0; i<VAR_NUMBER-1; ++i) {
+        result += sqr(1 - *curPos) + 100 * sqr(*(curPos+1) - sqr(*curPos));
+        ++curPos;
+    }
+    return result;
+}
+
+ __device__ float rastrigin(const float *curPos) {
+    float result = 10.0f * VAR_NUMBER;
+    for (size_t i=0; i<VAR_NUMBER; ++i) {
+        result += *curPos * *curPos - 10.0f * cosf(2 * CUDART_PI_F * *curPos);
+        ++curPos;
+    }
+    return result;
+ }
+
 __global__ void GAKernel(float* population, ScoreWithId* score, curandState* randomStates) {
-	__shared__ float sharedPopulation[MAX_THREADS_PER_BLOCK][VAR_NUMBER];
-	__shared__ float sharedScore[MAX_THREADS_PER_BLOCK];
+	__shared__ float sharedPopulation[THREADS_PER_BLOCK * 2][VAR_NUMBER];
+	__shared__ float sharedScore[THREADS_PER_BLOCK * 2];
 	const float signs[2] = {-1.0f, 1.0f};
 
 	const int gid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -50,90 +68,74 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
             sharedPopulation[tid][i] = population[gid * VAR_NUMBER + i];
     }
 
-	//for (int i=0; i<VAR_NUMBER; ++i)
-		//sharedPopulation[tid][i] = i + tid;
+    sharedScore[tid + THREADS_PER_BLOCK] = 123123.0;
+
+    __syncthreads();
+    // we first have to calculate the score for the first half of threads
+    const float *curPos = sharedPopulation[tid];
+    sharedScore[tid] = rosenbrock(curPos);
 
 	curandState &localState = randomStates[tid];
 	for (int generationIndex=0; ; ++generationIndex) {
 		__syncthreads();
 
-		// calculating score
-		const float *curPos = sharedPopulation[tid];
-		float result = 0;
-        // rosenbrock
-        /*
-		for (size_t i=0; i<VAR_NUMBER-1; ++i) {
-			result += sqr(1 - *curPos) + 100 * sqr(*(curPos+1) - sqr(*curPos));
-			++curPos;
-		}
-        */
-
-        // rastrigin
-        result = 10.0f * VAR_NUMBER;
-        for (size_t i=0; i<VAR_NUMBER; ++i) {
-            result += *curPos * *curPos - 10.0f * cosf(2 * CUDART_PI_F * *curPos);
-            ++curPos;
-        }
-		sharedScore[tid] = result;
+		// calculating score for the second half of threads
+		const float *curPos = sharedPopulation[tid + THREADS_PER_BLOCK];
+		sharedScore[tid + THREADS_PER_BLOCK] = rosenbrock(curPos);
 
 		__syncthreads();
 
-		if (generationIndex == 1111111) break;
+		if (generationIndex == 1111) break;
 
 		// selection
-
-		if (tid < MAX_THREADS_PER_BLOCK / 2) {
-			// first half of threads writes best individual into its position
-			if (sharedScore[tid] > sharedScore[tid + MAX_THREADS_PER_BLOCK / 2]) {
-				for (int i=0; i<VAR_NUMBER; ++i)
-					sharedPopulation[tid][i] = sharedPopulation[tid + MAX_THREADS_PER_BLOCK / 2][i];
-			}
-		}
+        // first half of threads writes best individual into its position
+        if (sharedScore[tid] > sharedScore[tid + THREADS_PER_BLOCK]) {
+            for (int i=0; i<VAR_NUMBER; ++i)
+                sharedPopulation[tid][i] = sharedPopulation[tid + THREADS_PER_BLOCK][i];
+            sharedScore[tid] = sharedScore[tid + THREADS_PER_BLOCK];
+        }
 
 		__syncthreads();
 
 		// now we've got best individuals in the first half of sharedPopulation
 
 		// crossovers
-		if (tid >= MAX_THREADS_PER_BLOCK / 2) {
-			int first = curand_uniform(&localState) * (MAX_THREADS_PER_BLOCK / 2);
-			int second = curand_uniform(&localState) * (MAX_THREADS_PER_BLOCK / 2);
-		
-            const float weight = curand_uniform(&localState);
-			for (int i=0; i<VAR_NUMBER; ++i) {
-				sharedPopulation[tid][i] = (sharedPopulation[first][i] * weight + sharedPopulation[second][i] * (1.0f - weight));
-			}
-		}
+        const int first = curand_uniform(&localState) * THREADS_PER_BLOCK;
+        const int second = curand_uniform(&localState) * THREADS_PER_BLOCK;
+    
+        const float weight = curand_uniform(&localState);
+        for (int i=0; i<VAR_NUMBER; ++i) {
+            sharedPopulation[tid + THREADS_PER_BLOCK][i] = (sharedPopulation[first][i] * weight + sharedPopulation[second][i] * (1.0f - weight));
+        }
 
 		__syncthreads();
 
-		// mutations
-        if (tid >= MAX_THREADS_PER_BLOCK / 2) {
-            if (curand_uniform(&localState) < 0.8) {
-                const float order = (curand_uniform(&localState) * 17) - 15;
-                for (int i=0; i<VAR_NUMBER; ++i) {
-                    if (curand_uniform(&localState) < 0.8) {
-                        const float sign = signs[static_cast<int>(curand_uniform(&localState)*2)];
-                        const float order_deviation = (curand_uniform(&localState) - 0.5f) * 5;
-                        sharedPopulation[tid][i] += powf(10.0, order + order_deviation) * sign;
-                    }
+		// mutations on second half of population
+        if (curand_uniform(&localState) < 0.8) {
+            const float order = (curand_uniform(&localState) * 17) - 15;
+            for (int i=0; i<VAR_NUMBER; ++i) {
+                if (curand_uniform(&localState) < 0.8) {
+                    const float sign = signs[static_cast<int>(curand_uniform(&localState)*2)];
+                    const float order_deviation = (curand_uniform(&localState) - 0.5f) * 5;
+                    sharedPopulation[tid + THREADS_PER_BLOCK][i] += powf(10.0, order + order_deviation) * sign;
                 }
             }
-        } else {
-            if ((blockIdx.x + generationIndex) % 5 == 0) {
-                // sharing a part of population with others
-                for (int i=0; i<VAR_NUMBER; ++i)
-                    population[gid * VAR_NUMBER + i] = sharedPopulation[tid][i];
-            }
+        }
 
-            if ((blockIdx.x + generationIndex) % 3 == 0) {
-                if (curand_uniform(&localState) < 0.11) {
-                    // take some best individuals from neighbour
-                    const int anotherBlock = curand_uniform(&localState) * (POPULATION_SIZE / MAX_THREADS_PER_BLOCK);
-                    const int ngid  = blockDim.x * anotherBlock + threadIdx.x;
-                    for (int i=0; i<VAR_NUMBER; ++i)
-                        sharedPopulation[tid][i] = population[ngid * VAR_NUMBER + i];
-                }
+        // sharing a part of population with others
+        if ((blockIdx.x + generationIndex) % 5 == 0) {
+            for (int i=0; i<VAR_NUMBER; ++i)
+                population[gid * VAR_NUMBER + i] = sharedPopulation[tid][i];
+        }
+
+        // take some best individuals from neighbour
+        if ((blockIdx.x + generationIndex) % 3 == 0) {
+            if (curand_uniform(&localState) < 0.11) {
+                const int anotherBlock = curand_uniform(&localState) * (POPULATION_SIZE / THREADS_PER_BLOCK);
+                const int ngid  = blockDim.x * anotherBlock + threadIdx.x;
+                for (int i=0; i<VAR_NUMBER; ++i)
+                    sharedPopulation[tid][i] = population[ngid * VAR_NUMBER + i];
+                sharedScore[tid] = rosenbrock(sharedPopulation[tid]);
             }
         }
 	}
@@ -194,7 +196,7 @@ double solveGPU() {
 	ScoreWithId *deviceScore = 0;
 	curandState* randomStates;
 
-	cudasafe(cudaMalloc(&randomStates, MAX_THREADS_PER_BLOCK * sizeof(curandState)), "Could not allocate memory for randomStates");
+	cudasafe(cudaMalloc(&randomStates, THREADS_PER_BLOCK * sizeof(curandState)), "Could not allocate memory for randomStates");
 	cudasafe(cudaMalloc((void **)&devicePopulation, POPULATION_SIZE * VAR_NUMBER * sizeof(float)), "Could not allocate memory for devicePopulation");
 	cudasafe(cudaMalloc((void **)&nextGeneration, POPULATION_SIZE * VAR_NUMBER * sizeof(float)), "Could not allocate memory for nextGeneration");
 	cudasafe(cudaMalloc((void **)&deviceScore, POPULATION_SIZE * sizeof (ScoreWithId)), "Could not allocate memory for deviceScore");
@@ -202,14 +204,14 @@ double solveGPU() {
 	cudasafe(cudaMemcpy(devicePopulation, population, POPULATION_SIZE * VAR_NUMBER * sizeof(float), cudaMemcpyHostToDevice), "Could not copy population to device");
 
 	// invoking random init
-	randomInit<<<1, MAX_THREADS_PER_BLOCK>>>(randomStates, 900);
+	randomInit<<<1, THREADS_PER_BLOCK>>>(randomStates, 900);
 	cudasafe(cudaGetLastError(), "Could not invoke kernel randomInit");
 	cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calling randomInit");
 
-	const int BLOCKS_NUMBER = (POPULATION_SIZE + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK;
+	const int BLOCKS_NUMBER = (POPULATION_SIZE + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     //for (int i=0; i<1115; i++) {
-        GAKernel<<<BLOCKS_NUMBER, MAX_THREADS_PER_BLOCK>>>(devicePopulation, deviceScore, randomStates);
+        GAKernel<<<BLOCKS_NUMBER, THREADS_PER_BLOCK>>>(devicePopulation, deviceScore, randomStates);
         cudasafe(cudaGetLastError(), "Could not invoke GAKernel");
         cudasafe(cudaDeviceSynchronize(), "Failed to syncrhonize device after calling GAKernel");
 
@@ -229,7 +231,7 @@ double solveGPU() {
 
 int main() {
 	freopen("output.txt", "w", stdout);
-	srand(900);
+	srand(1900);
 	srand(static_cast<unsigned>(time(0)));
 
 	double ans = solveGPU();
