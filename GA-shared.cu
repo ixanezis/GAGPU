@@ -45,14 +45,14 @@ __device__ float rosenbrock(const float* curPos) {
     return result;
 }
 
- __device__ float rastrigin(const float *curPos) {
+__device__ float rastrigin(const float *curPos) {
     float result = 10.0f * VAR_NUMBER;
     for (size_t i=0; i<VAR_NUMBER; ++i) {
         result += *curPos * *curPos - 10.0f * cosf(2 * CUDART_PI_F * *curPos);
         ++curPos;
     }
     return result;
- }
+}
 
 __global__ void GAKernel(float* population, ScoreWithId* score, curandState* randomStates) {
 	__shared__ float sharedPopulation[THREADS_PER_BLOCK * 2][VAR_NUMBER];
@@ -79,13 +79,13 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 	for (int generationIndex=0; ; ++generationIndex) {
 		__syncthreads();
 
-		// calculating score for the second half of threads
+		// calculating score for the second half of individuals
 		const float *curPos = sharedPopulation[tid + THREADS_PER_BLOCK];
 		sharedScore[tid + THREADS_PER_BLOCK] = rosenbrock(curPos);
 
 		__syncthreads();
 
-		if (generationIndex == 1111) break;
+		if (generationIndex == 1000000) break;
 
 		// selection
         // first half of threads writes best individual into its position
@@ -105,7 +105,7 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
     
         const float weight = curand_uniform(&localState);
         for (int i=0; i<VAR_NUMBER; ++i) {
-            sharedPopulation[tid + THREADS_PER_BLOCK][i] = (sharedPopulation[first][i] * weight + sharedPopulation[second][i] * (1.0f - weight));
+            sharedPopulation[tid + THREADS_PER_BLOCK][i] = sharedPopulation[first][i] * weight + sharedPopulation[second][i] * (1.0f - weight);
         }
 
 		__syncthreads();

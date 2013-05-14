@@ -12,4 +12,3 @@ struct ScoreWithId {
 	float score;
 	int id;
 };
-
