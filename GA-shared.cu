@@ -85,7 +85,7 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
 
 		__syncthreads();
 
-		if (generationIndex == 1000000) break;
+		if (generationIndex == 400000) break;
 
 		// selection
         // first half of threads writes best individual into its position

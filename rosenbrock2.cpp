@@ -61,7 +61,7 @@ double solveCPU() {
             score[i] = rosenbrock(curpos);
         }
 
-        if (generationIndex == 1000000) break;
+        if (generationIndex == 400000) break;
 
 		// selection
         // first half of individuals might be replaced with corresponding from another half
