@@ -6,9 +6,11 @@
 #include <cstring>
 #include "constants.h"
 
-double random_cache[1 << 16];
+const float PI_FLOAT = acos(-1.0f);
+
+float random_cache[1 << 16];
 int nxtRandom = 0;
-double fast_float_random() {
+float fast_float_random() {
 	++nxtRandom; nxtRandom &= ((1 << 16) - 1);
 	return random_cache[nxtRandom];
 }
@@ -30,7 +32,7 @@ float rosenbrock(const float* curPos) {
 float rastrigin(const float *curPos) {
     float result = 10.0f * VAR_NUMBER;
     for (size_t i=0; i<VAR_NUMBER; ++i) {
-        result += *curPos * *curPos - 10.0f * cosf(2 * M_PI * *curPos);
+        result += *curPos * *curPos - 10.0f * cosf(2 * PI_FLOAT * *curPos);
         ++curPos;
     }
     return result;
@@ -78,7 +80,7 @@ double solveCPU() {
             
             const float weight = fast_float_random();
 			for (int u=0; u<VAR_NUMBER; ++u) {
-				population[i + VAR_NUMBER * u] = population[first + VAR_NUMBER * u] * weight + population[second + VAR_NUMBER * u] * (1.0 - weight);
+				population[i * VAR_NUMBER + u] = population[first * VAR_NUMBER + u] * weight + population[second * VAR_NUMBER + u] * (1.0f - weight);
 			}
         }
             
@@ -90,7 +92,7 @@ double solveCPU() {
                     if (fast_float_random() < 0.8) {
                         const float sign = signs[rand() % 2];
                         const float order_deviation = (fast_float_random() - 0.5f) * 5;
-                        population[i + VAR_NUMBER * u] += powf(10.0, order + order_deviation) * sign;
+                        population[i * VAR_NUMBER + u] += powf(10.0, order + order_deviation) * sign;
                     }
                 }
             }
