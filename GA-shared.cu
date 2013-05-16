@@ -57,7 +57,8 @@ __device__ float rastrigin(const float *curPos) {
 __global__ void GAKernel(float* population, ScoreWithId* score, curandState* randomStates) {
 	__shared__ float sharedPopulation[THREADS_PER_BLOCK * 2][VAR_NUMBER];
 	__shared__ float sharedScore[THREADS_PER_BLOCK * 2];
-	const float signs[2] = {-1.0f, 1.0f};
+	const float SIGN[2] = {-1.0f, 1.0f};
+    const float MULT[2] = {1.0f, 0.0f};
 
 	const int gid = blockDim.x * blockIdx.x + threadIdx.x;
 	const int tid = threadIdx.x;
@@ -114,11 +115,10 @@ __global__ void GAKernel(float* population, ScoreWithId* score, curandState* ran
         if (curand_uniform(&localState) < 0.8) {
             const float order = (curand_uniform(&localState) * 17) - 15;
             for (int i=0; i<VAR_NUMBER; ++i) {
-                if (curand_uniform(&localState) < 0.8) {
-                    const float sign = signs[static_cast<int>(curand_uniform(&localState)*2)];
-                    const float order_deviation = (curand_uniform(&localState) - 0.5f) * 5;
-                    sharedPopulation[tid + THREADS_PER_BLOCK][i] += powf(10.0, order + order_deviation) * sign;
-                }
+                const float mult = MULT[curand_uniform(&localState) < 0.8f];
+                const float sign = SIGN[curand_uniform(&localState) < 0.5f];
+                const float order_deviation = (curand_uniform(&localState) - 0.5f) * 5;
+                sharedPopulation[tid + THREADS_PER_BLOCK][i] += powf(10.0f, order + order_deviation) * sign * mult;
             }
         }
 
